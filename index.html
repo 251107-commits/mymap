@@ -105,4 +105,264 @@
         #pagination {
             padding: 12px;
             text-align: center;
-            background-color: #
+            background-color: #ffffff;
+            border-top: 1px solid #e9ecef;
+        }
+        #pagination a {
+            display: inline-block;
+            margin: 0 3px;
+            padding: 4px 8px;
+            text-decoration: none;
+            color: #495057;
+            border: 1px solid #dee2e6;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        #pagination a.on {
+            background-color: #339af0;
+            color: #ffffff;
+            border-color: #339af0;
+        }
+
+        /* 오른쪽 지도 영역 */
+        #map {
+            flex: 1;
+            height: 100%;
+        }
+
+        /* 인포윈도우 스타일 */
+        .info-window {
+            padding: 8px 12px;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- 왼쪽 영역: 검색창 및 리스트 -->
+        <div class="sidebar">
+            <div class="search-box">
+                <form id="searchForm">
+                    <input type="text" id="keyword" placeholder="장소를 입력하세요 (예: 강남역 맛집)" value="강남역 맛집">
+                    <button type="submit">검색</button>
+                </form>
+            </div>
+            <ul id="placesList"></ul>
+            <div id="pagination"></div>
+        </div>
+
+        <!-- 오른쪽 영역: 카카오 지도 -->
+        <div id="map"></div>
+    </div>
+
+    <!-- 카카오 지도 JavaScript SDK (autoload=false 필수 설정) -->
+    <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=955d4144cbe385e4569d6bf62da15225&libraries=services&autoload=false"></script>
+
+    <script>
+        // 전역 변수 선언
+        let map;
+        let placesService;
+        let infowindow;
+        let markers = [];
+
+        // 지도가 안전하게 로드된 후에 실행
+        kakao.maps.load(function () {
+            const mapContainer = document.getElementById('map');
+            
+            // 지도 초기 설정 (기본 중심 좌표: 서울시청, 확대 레벨: 5)
+            const mapOptions = {
+                center: new kakao.maps.LatLng(37.566826, 126.9786567),
+                level: 5
+            };
+
+            // 지도 생성
+            map = new kakao.maps.Map(mapContainer, mapOptions);
+
+            // 장소 검색 서비스 및 인포윈도우 생성
+            placesService = new kakao.maps.services.Places();
+            infowindow = new kakao.maps.InfoWindow({ zIndex: 1 });
+
+            // 브라우저 위치 권한 요청 후 현재 위치로 이동
+            setCurrentLocation();
+
+            // 검색 폼 이벤트 연결
+            const searchForm = document.getElementById('searchForm');
+            searchForm.addEventListener('submit', function (e) {
+                e.preventDefault(); // 폼 제출 시 페이지 리로드 방지
+                searchPlaces();
+            });
+        });
+
+        // 사용자 현재 위치를 구해서 지도의 중심으로 설정하는 함수
+        function setCurrentLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    function (position) {
+                        const latitude = position.coords.latitude;
+                        const longitude = position.coords.longitude;
+                        const currentPosition = new kakao.maps.LatLng(latitude, longitude);
+
+                        // 지도 중심을 현재 위치로 이동
+                        map.setCenter(currentPosition);
+                    },
+                    function (error) {
+                        console.warn('위치 권한을 허용하지 않아 기본 위치로 표시합니다.', error);
+                    }
+                );
+            } else {
+                console.warn('이 브라우저에서는 Geolocation을 지원하지 않습니다.');
+            }
+        }
+
+        // 장소 검색 요청 함수
+        function searchPlaces() {
+            const keywordInput = document.getElementById('keyword');
+            const keyword = keywordInput.value.trim();
+
+            if (!keyword) {
+                alert('검색어를 입력해 주세요!');
+                return;
+            }
+
+            // 카카오 키워드 검색 API 호출
+            placesService.keywordSearch(keyword, placesSearchCallback);
+        }
+
+        // 검색 결과를 받아 처리하는 콜백 함수
+        function placesSearchCallback(data, status, pagination) {
+            if (status === kakao.maps.services.Status.OK) {
+                // 검색된 장소 목록 및 마커 표시
+                displayPlaces(data);
+
+                // 페이지 번호 표시
+                displayPagination(pagination);
+            } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+                alert('검색 결과가 존재하지 않습니다.');
+                clearListAndMarkers();
+            } else if (status === kakao.maps.services.Status.ERROR) {
+                alert('검색 중 오류가 발생했습니다.');
+                clearListAndMarkers();
+            }
+        }
+
+        // 검색된 장소들을 리스트와 지도 마커로 시각화하는 함수
+        function displayPlaces(places) {
+            const listElement = document.getElementById('placesList');
+            const bounds = new kakao.maps.LatLngBounds();
+
+            // 기존 리스트와 마커 정리
+            clearListAndMarkers();
+
+            places.forEach((place, index) => {
+                const placePosition = new kakao.maps.LatLng(place.y, place.x);
+
+                // 마커 생성
+                const marker = addMarker(placePosition);
+
+                // 검색 결과 리스트 아이템 생성
+                const itemElement = createListItem(index, place);
+
+                // 지도 영역을 재설정하기 위해 좌표 저장
+                bounds.extend(placePosition);
+
+                // 마커 및 리스트 클릭/마우스오버 이벤트 연결
+                (function (marker, title) {
+                    // 마커 클릭 시 인포윈도우 표시
+                    kakao.maps.event.addListener(marker, 'click', function () {
+                        displayInfowindow(marker, title);
+                    });
+
+                    // 리스트 마우스오버 시 인포윈도우 표시
+                    itemElement.onmouseover = function () {
+                        displayInfowindow(marker, title);
+                    };
+
+                    // 리스트 클릭 시 지도 중심 이동 및 인포윈도우 표시
+                    itemElement.onclick = function () {
+                        map.panTo(placePosition);
+                        displayInfowindow(marker, title);
+                    };
+                })(marker, place.place_name);
+
+                listElement.appendChild(itemElement);
+            });
+
+            // 검색된 장소들이 모두 보이도록 지도 화면 범위 조절
+            map.setBounds(bounds);
+        }
+
+        // 마커를 생성하고 배열에 등록하는 함수
+        function addMarker(position) {
+            const marker = new kakao.maps.Marker({
+                position: position,
+                map: map
+            });
+
+            markers.push(marker);
+            return marker;
+        }
+
+        // 마커 및 목록 초기화 함수
+        function clearListAndMarkers() {
+            const listElement = document.getElementById('placesList');
+            listElement.innerHTML = '';
+
+            markers.forEach(marker => marker.setMap(null));
+            markers = [];
+        }
+
+        // 리스트 항목(HTML)을 생성하는 함수
+        function createListItem(index, place) {
+            const el = document.createElement('li');
+            el.className = 'item';
+
+            let addressHtml = `<span>${place.address_name}</span>`;
+            if (place.road_address_name) {
+                addressHtml = `<span>${place.road_address_name}</span><br><span class="address">(지번: ${place.address_name})</span>`;
+            }
+
+            el.innerHTML = `
+                <h5>${index + 1}. ${place.place_name}</h5>
+                <div class="address">${addressHtml}</div>
+                ${place.phone ? `<div class="phone">${place.phone}</div>` : ''}
+            `;
+
+            return el;
+        }
+
+        // 지도 상에 인포윈도우(팝업)를 표시하는 함수
+        function displayInfowindow(marker, title) {
+            const content = `<div class="info-window">${title}</div>`;
+            infowindow.setContent(content);
+            infowindow.open(map, marker);
+        }
+
+        // 하단 페이지 번호를 생성하는 함수
+        function displayPagination(pagination) {
+            const paginationElement = document.getElementById('pagination');
+            paginationElement.innerHTML = '';
+
+            for (let i = 1; i <= pagination.last; i++) {
+                const pageLink = document.createElement('a');
+                pageLink.href = '#';
+                pageLink.innerHTML = i;
+
+                if (i === pagination.current) {
+                    pageLink.className = 'on';
+                } else {
+                    pageLink.onclick = (function (i) {
+                        return function (e) {
+                            e.preventDefault();
+                            pagination.gotoPage(i);
+                        };
+                    })(i);
+                }
+
+                paginationElement.appendChild(pageLink);
+            }
+        }
+    </script>
+</body>
+</html>
